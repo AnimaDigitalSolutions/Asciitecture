@@ -70,7 +70,7 @@ export function exportHTML(objects, canvasCols, canvasRows) {
       margin: 0;
     }
     pre {
-      font-size: 14px;
+      font-size: 17.5px;
       line-height: 1.2;
       letter-spacing: 0.05em;
     }

@@ -5,8 +5,8 @@ import { Storage } from "./lib/storage";
 import { exportMarkdown, copyToClipboard, downloadFile } from "./lib/export";
 
 // ─── Constants ────────────────────────────────────────────────
-const CELL_W = 10;
-const CELL_H = 18;
+const CELL_W = 12.5;
+const CELL_H = 22.5;
 const COLS = 100;
 const ROWS = 50;
 
@@ -50,6 +50,11 @@ export default function App() {
   const [selectedId, setSelectedId] = useState(null);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
+  const [editingTextId, setEditingTextId] = useState(null);
+  const [editingText, setEditingText] = useState("");
+  const [undoStack, setUndoStack] = useState([]);
+  const [redoStack, setRedoStack] = useState([]);
+  const [isUndoing, setIsUndoing] = useState(false);
   const [tool, setTool] = useState("select");
   const [placingTemplate, setPlacingTemplate] = useState(null);
   const [dragState, setDragState] = useState(null);
@@ -107,11 +112,58 @@ export default function App() {
     [objects, selectedId]
   );
 
+  // ─── Undo/Redo Management ─────────────────────────────────
+  const saveToHistory = useCallback((currentObjects) => {
+    if (!isUndoing) {
+      setUndoStack(prev => [...prev.slice(-19), currentObjects]); // Keep last 20 states
+      setRedoStack([]); // Clear redo stack on new action
+    }
+  }, [isUndoing]);
+
+  const setObjectsWithHistory = useCallback((newObjects) => {
+    if (!isUndoing) {
+      saveToHistory(objects);
+    }
+    setObjects(newObjects);
+  }, [objects, saveToHistory, isUndoing, setObjects]);
+
+  // ─── Notification helper ──────────────────────────────────
+  const notify = useCallback((msg) => {
+    setNotification(msg);
+    setTimeout(() => setNotification(null), 2500);
+  }, []);
+
+  const undo = useCallback(() => {
+    if (undoStack.length > 0) {
+      setIsUndoing(true);
+      const previousState = undoStack[undoStack.length - 1];
+      setRedoStack(prev => [objects, ...prev]);
+      setUndoStack(prev => prev.slice(0, -1));
+      setObjects(previousState);
+      setSelectedId(null);
+      notify("Undone");
+      setTimeout(() => setIsUndoing(false), 10);
+    }
+  }, [undoStack, objects, setObjects, notify]);
+
+  const redo = useCallback(() => {
+    if (redoStack.length > 0) {
+      setIsUndoing(true);
+      const nextState = redoStack[0];
+      setUndoStack(prev => [...prev, objects]);
+      setRedoStack(prev => prev.slice(1));
+      setObjects(nextState);
+      setSelectedId(null);
+      notify("Redone");
+      setTimeout(() => setIsUndoing(false), 10);
+    }
+  }, [redoStack, objects, setObjects, notify]);
+
   // ─── Mobile Detection ─────────────────────────────────────
   useEffect(() => {
     const checkMobile = () => {
-      setIsMobile(window.innerWidth <= 768);
-      if (window.innerWidth > 768) {
+      setIsMobile(window.innerWidth <= 960);
+      if (window.innerWidth > 960) {
         setShowMobileMenu(false);
       }
     };
@@ -222,12 +274,6 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [objects]);
 
-  // ─── Notification helper ──────────────────────────────────
-  const notify = useCallback((msg) => {
-    setNotification(msg);
-    setTimeout(() => setNotification(null), 2500);
-  }, []);
-
   // ─── Canvas pixel → grid cell ─────────────────────────────
   const pixelToCell = useCallback(
     (px, py) => {
@@ -274,8 +320,10 @@ export default function App() {
         if (tmpl) {
           const data = tmpl.create();
           const newObj = { id: uid(), type: placingTemplate, x: col, y: row, data, mode };
-          setObjects((prev) => [...prev, newObj]);
+          setObjectsWithHistory((prev) => [...prev, newObj]);
           setSelectedId(newObj.id);
+          setTool("select");
+          setPlacingTemplate(null);
           notify(`Placed ${tmpl.label}`);
         }
         return;
@@ -289,7 +337,7 @@ export default function App() {
         setSelectedId(null);
       }
     },
-    [tool, placingTemplate, pixelToCell, hitTest, notify]
+    [tool, placingTemplate, pixelToCell, hitTest, notify, mode, setObjectsWithHistory]
   );
 
   const handleCanvasMouseMove = useCallback(
@@ -300,7 +348,7 @@ export default function App() {
       if (dragState) {
         const dx = col - dragState.startCol;
         const dy = row - dragState.startRow;
-        setObjects((prev) =>
+        setObjectsWithHistory((prev) =>
           prev.map((o) =>
             o.id === dragState.id
               ? { ...o, x: Math.max(0, dragState.origX + dx), y: Math.max(0, dragState.origY + dy) }
@@ -309,12 +357,28 @@ export default function App() {
         );
       }
     },
-    [dragState, pixelToCell]
+    [dragState, pixelToCell, setObjectsWithHistory]
   );
 
   const handleCanvasMouseUp = useCallback(() => {
     setDragState(null);
   }, []);
+
+  const handleCanvasDoubleClick = useCallback(
+    (e) => {
+      const { col, row } = pixelToCell(e.clientX, e.clientY);
+      const hit = hitTest(col, row);
+      if (hit) {
+        const obj = objects.find(o => o.id === hit.id);
+        if (obj && obj.data && obj.data.lines) {
+          setEditingTextId(hit.id);
+          setEditingText(obj.data.lines.join('\n'));
+          setSelectedId(hit.id);
+        }
+      }
+    },
+    [pixelToCell, hitTest, objects, setEditingTextId, setEditingText, setSelectedId]
+  );
 
   // ─── Keyboard shortcuts ───────────────────────────────────
   useEffect(() => {
@@ -323,7 +387,7 @@ export default function App() {
 
       if (e.key === "Delete" || e.key === "Backspace") {
         if (selectedId) {
-          setObjects((prev) => prev.filter((o) => o.id !== selectedId));
+          setObjectsWithHistory((prev) => prev.filter((o) => o.id !== selectedId));
           setSelectedId(null);
           notify("Deleted");
         }
@@ -335,6 +399,17 @@ export default function App() {
         setShowMarkdown(false);
         setShowImport(false);
         setShowHelp(false);
+        if (editingTextId) {
+          setEditingTextId(null);
+          setEditingText("");
+        }
+      }
+      if (e.key === "Enter" && selectedId && !editingTextId) {
+        const obj = objects.find((o) => o.id === selectedId);
+        if (obj && obj.data && obj.data.lines) {
+          setEditingTextId(selectedId);
+          setEditingText(obj.data.lines.join('\n'));
+        }
       }
       if (e.key === "d" && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
@@ -342,7 +417,7 @@ export default function App() {
           const obj = objects.find((o) => o.id === selectedId);
           if (obj) {
             const dup = { ...obj, id: uid(), x: obj.x + 2, y: obj.y + 2, data: { ...obj.data, lines: [...obj.data.lines] } };
-            setObjects((prev) => [...prev, dup]);
+            setObjectsWithHistory((prev) => [...prev, dup]);
             setSelectedId(dup.id);
             notify("Duplicated");
           }
@@ -352,10 +427,29 @@ export default function App() {
         e.preventDefault();
         notify("🚧 Share feature coming soon! Stay tuned...");
       }
+      if (e.key === "c" && (e.ctrlKey || e.metaKey) && e.shiftKey) {
+        e.preventDefault();
+        if (objects.length === 0) {
+          notify("Canvas is already empty");
+          return;
+        }
+        setObjectsWithHistory([]);
+        setSelectedId(null);
+        setPlacingTemplate(null);
+        notify("Canvas cleared");
+      }
+      if (e.key === "z" && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
+        e.preventDefault();
+        undo();
+      }
+      if ((e.key === "z" && (e.ctrlKey || e.metaKey) && e.shiftKey) || (e.key === "y" && (e.ctrlKey || e.metaKey))) {
+        e.preventDefault();
+        redo();
+      }
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [selectedId, objects, notify]);
+  }, [selectedId, objects, notify, setObjectsWithHistory, setSelectedId, setPlacingTemplate, editingTextId, setEditingTextId, setEditingText, undo, redo]);
 
   // ─── Export markdown ──────────────────────────────────────
   const handleExportMarkdown = useCallback(() => {
@@ -371,6 +465,66 @@ export default function App() {
     );
   }, [markdownText, notify]);
 
+  // ─── Clear canvas ─────────────────────────────────────────
+  const handleClearCanvas = useCallback(() => {
+    if (objects.length === 0) {
+      notify("Canvas is already empty");
+      return;
+    }
+    setObjectsWithHistory([]);
+    setSelectedId(null);
+    setPlacingTemplate(null);
+    notify("Canvas cleared");
+  }, [objects.length, notify]);
+
+  // ─── Text editing ─────────────────────────────────────────
+  const startEditingText = useCallback((objId) => {
+    const obj = objects.find(o => o.id === objId);
+    if (obj && obj.data && obj.data.lines) {
+      setEditingTextId(objId);
+      setEditingText(obj.data.lines.join('\n'));
+      setSelectedId(objId);
+    }
+  }, [objects]);
+
+  const finishEditingText = useCallback(() => {
+    if (editingTextId && editingText.trim()) {
+      const lines = editingText.split('\n');
+      const data = { 
+        lines, 
+        w: Math.max(...lines.map(l => l.length)), 
+        h: lines.length 
+      };
+      setObjectsWithHistory(prev => prev.map(obj => 
+        obj.id === editingTextId 
+          ? { ...obj, data }
+          : obj
+      ));
+      notify("Text updated");
+    }
+    setEditingTextId(null);
+    setEditingText("");
+  }, [editingTextId, editingText, notify]);
+
+  const cancelEditingText = useCallback(() => {
+    setEditingTextId(null);
+    setEditingText("");
+  }, []);
+
+  // ─── Add text tool ────────────────────────────────────────
+  const addTextObject = useCallback((col, row) => {
+    const defaultText = "Edit me";
+    const lines = [defaultText];
+    const data = { lines, w: defaultText.length, h: 1 };
+    const newObj = { id: uid(), type: "text", x: col, y: row, data };
+    setObjectsWithHistory(prev => [...prev, newObj]);
+    setSelectedId(newObj.id);
+    // Start editing immediately
+    setTimeout(() => startEditingText(newObj.id), 100);
+    setTool("select");
+    notify("Text added");
+  }, [startEditingText, notify]);
+
   // ─── Import ────────────────────────────────────────────────
   const handleImport = useCallback(() => {
     let text = importText;
@@ -378,7 +532,7 @@ export default function App() {
     const lines = text.split("\n");
     const data = { lines, w: Math.max(...lines.map((l) => l.length)), h: lines.length };
     const newObj = { id: uid(), type: "imported", x: 2, y: 2, data };
-    setObjects((prev) => [...prev, newObj]);
+    setObjectsWithHistory((prev) => [...prev, newObj]);
     setShowImport(false);
     setImportText("");
     notify("Imported wireframe");
@@ -461,24 +615,24 @@ export default function App() {
 
   // ─── Theme-aware Styles ─────────────────────────────────
   const topBtnStyle = {
-    padding: "6px 12px",
+    padding: "7.5px 15px",
     border: `1px solid ${colors.borderDark}`,
-    borderRadius: 5,
+    borderRadius: 6.25,
     background: colors.buttonBg,
     color: colors.textSecondary,
-    fontSize: 12,
+    fontSize: 15,
     fontFamily: "inherit",
     cursor: "pointer",
     transition: "all 0.15s",
   };
 
   const toolBtnStyle = {
-    padding: "4px 10px",
+    padding: "5px 12.5px",
     border: `1px solid ${colors.borderDark}`,
     borderRadius: 4,
     background: colors.buttonBg,
     color: colors.textMuted,
-    fontSize: 12,
+    fontSize: 15,
     fontFamily: "inherit",
     cursor: "pointer",
     transition: "all 0.15s",
@@ -490,7 +644,7 @@ export default function App() {
     borderRadius: 4,
     background: colors.buttonBg,
     color: colors.textSecondary,
-    fontSize: 11,
+    fontSize: 13.75,
     fontFamily: "inherit",
     cursor: "pointer",
     transition: "all 0.15s",
@@ -498,14 +652,14 @@ export default function App() {
 
   const kbdStyle = {
     display: "inline-block",
-    padding: "1px 5px",
+    padding: "1.25px 6.25px",
     border: `1px solid ${colors.borderDark}`,
-    borderRadius: 3,
+    borderRadius: 3.75,
     background: colors.buttonBg,
     color: colors.textMuted,
     fontSize: 10,
     fontFamily: "inherit",
-    marginRight: 4,
+    marginRight: 5,
   };
 
   const overlayStyle = {
@@ -522,10 +676,10 @@ export default function App() {
   const modalStyle = {
     background: colors.modalBg,
     border: `1px solid ${colors.border}`,
-    borderRadius: 8,
-    padding: 24,
+    borderRadius: 10,
+    padding: 30,
     width: "90%",
-    maxWidth: 480,
+    maxWidth: 600,
     maxHeight: "80vh",
     overflow: "auto",
     boxShadow: theme === 'light' ? "0 20px 60px #00000020" : "0 20px 60px #00000080",
@@ -535,20 +689,20 @@ export default function App() {
     background: "none",
     border: "none",
     color: colors.textMuted,
-    fontSize: 18,
+    fontSize: 22.5,
     cursor: "pointer",
-    padding: "4px 8px",
+    padding: "5px 10px",
   };
 
   const textareaStyle = {
     width: "100%",
-    height: 240,
-    padding: 12,
+    height: 300,
+    padding: 15,
     border: `1px solid ${colors.borderDark}`,
-    borderRadius: 6,
+    borderRadius: 7.5,
     background: colors.inputBg,
     color: colors.text,
-    fontSize: 12,
+    fontSize: 15,
     fontFamily: "'JetBrains Mono', monospace",
     resize: "vertical",
     lineHeight: 1.5,
@@ -573,8 +727,8 @@ export default function App() {
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          height: 48,
-          padding: "0 16px",
+          height: 60,
+          padding: "0 20px",
           borderBottom: `1px solid ${colors.border}`,
           background: colors.backgroundSecondary,
           flexShrink: 0,
@@ -596,17 +750,17 @@ export default function App() {
               ☰
             </button>
           )}
-          <span style={{ fontSize: isMobile ? 16 : 18, fontWeight: 700, color: colors.text, letterSpacing: -0.5 }}>
+          <span style={{ fontSize: isMobile ? 20 : 22.5, fontWeight: 700, color: colors.text, letterSpacing: -0.5 }}>
             ◻ Asciitecture
           </span>
           {!isMobile && (
             <>
               <span
                 style={{
-                  fontSize: 10,
-                  padding: "2px 6px",
+                  fontSize: 12.5,
+                  padding: "2.5px 7.5px",
                   background: colors.borderDark,
-                  borderRadius: 4,
+                  borderRadius: 6.25,
                   color: colors.textMuted,
                 }}
               >
@@ -616,8 +770,8 @@ export default function App() {
                 <button
                   onClick={() => setMode('web')}
                   style={{
-                    padding: '2px 8px',
-                    fontSize: 10,
+                    padding: '2.5px 10px',
+                    fontSize: 12.5,
                     border: `1px solid ${colors.borderDark}`,
                     borderTopLeftRadius: 4,
                     borderBottomLeftRadius: 4,
@@ -636,8 +790,8 @@ export default function App() {
                 <button
                   onClick={() => setMode('diagram')}
                   style={{
-                    padding: '2px 8px',
-                    fontSize: 10,
+                    padding: '2.5px 10px',
+                    fontSize: 12.5,
                     border: `1px solid ${colors.borderDark}`,
                     borderTopLeftRadius: 0,
                     borderBottomLeftRadius: 0,
@@ -691,7 +845,7 @@ export default function App() {
         {/* ─── Left Panel ────────────────────────────────── */}
         <div
           style={{
-            width: isMobile ? (showMobileMenu ? "280px" : "0px") : 220,
+            width: isMobile ? (showMobileMenu ? "350px" : "0px") : 275,
             borderRight: `1px solid ${colors.border}`,
             background: colors.backgroundSecondary,
             display: "flex",
@@ -707,13 +861,13 @@ export default function App() {
             transform: isMobile ? (showMobileMenu ? "translateX(0)" : "translateX(-100%)") : "none",
           }}
         >
-          <div style={{ flex: 1, overflowY: "auto", padding: "8px 0" }}>
+          <div style={{ flex: 1, overflowY: "auto", padding: "10px 0" }}>
             {Object.entries(mode === 'diagram' ? DIAGRAM_CATEGORIES : CATEGORIES).map(([catKey, cat]) => (
               <div key={catKey} style={{ marginBottom: 8 }}>
                 <div
                   style={{
-                    padding: "4px 12px",
-                    fontSize: 10,
+                    padding: "5px 15px",
+                    fontSize: 12.5,
                     color: colors.categoryColors[catKey] || colors.textMuted,
                     textTransform: "uppercase",
                     letterSpacing: 1.5,
@@ -722,24 +876,24 @@ export default function App() {
                 >
                   {cat.label}
                 </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, padding: "0 8px" }}>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 5, padding: "0 10px" }}>
                   {(groupedTemplates[catKey] || []).map((tmpl) => (
                     <button
                       key={tmpl.key}
                       onClick={() => startPlace(tmpl.key)}
                       title={tmpl.label}
                       style={{
-                        width: 94,
-                        padding: "6px 4px",
+                        width: 117.5,
+                        padding: "7.5px 5px",
                         border:
                           placingTemplate === tmpl.key
                             ? "1px solid #3b82f6"
                             : `1px solid ${colors.borderDark}`,
-                        borderRadius: 4,
+                        borderRadius: 6.25,
                         background:
                           placingTemplate === tmpl.key ? "#3b82f620" : colors.buttonBg,
                         color: colors.textSecondary,
-                        fontSize: 11,
+                        fontSize: 13.75,
                         fontFamily: "inherit",
                         cursor: "pointer",
                         display: "flex",
@@ -767,11 +921,11 @@ export default function App() {
             }}>
               <div style={{ marginBottom: 12 }}>
                 <div style={{
-                  fontSize: 10,
+                  fontSize: 12.5,
                   color: colors.textMuted,
                   textTransform: 'uppercase',
                   letterSpacing: 1,
-                  marginBottom: 8
+                  marginBottom: 10
                 }}>
                   Mode
                 </div>
@@ -781,7 +935,7 @@ export default function App() {
                     style={{
                       flex: 1,
                       padding: '6px 8px',
-                      fontSize: 11,
+                      fontSize: 13.75,
                       border: `1px solid ${colors.borderDark}`,
                       borderTopLeftRadius: 4,
                       borderBottomLeftRadius: 4,
@@ -801,7 +955,7 @@ export default function App() {
                     style={{
                       flex: 1,
                       padding: '6px 8px',
-                      fontSize: 11,
+                      fontSize: 13.75,
                       border: `1px solid ${colors.borderDark}`,
                       borderTopLeftRadius: 0,
                       borderBottomLeftRadius: 0,
@@ -821,11 +975,11 @@ export default function App() {
               </div>
               <div style={{ marginBottom: 12 }}>
                 <div style={{
-                  fontSize: 10,
+                  fontSize: 12.5,
                   color: colors.textMuted,
                   textTransform: 'uppercase',
                   letterSpacing: 1,
-                  marginBottom: 8
+                  marginBottom: 10
                 }}>
                   Actions
                 </div>
@@ -844,6 +998,16 @@ export default function App() {
                   }}>
                     ↓ Import
                   </button>
+                  <button onClick={() => { handleClearCanvas(); setShowMobileMenu(false); }} style={{
+                    ...topBtnStyle,
+                    width: '100%',
+                    justifyContent: 'center',
+                    color: objects.length === 0 ? colors.textMuted : "#ef4444",
+                    opacity: objects.length === 0 ? 0.5 : 1,
+                  }}
+                  disabled={objects.length === 0}>
+                    🗑 Clear Canvas
+                  </button>
                 </div>
               </div>
             </div>
@@ -860,10 +1024,10 @@ export default function App() {
                 width: '100%',
                 padding: '8px 12px',
                 border: `1px solid ${colors.borderDark}`,
-                borderRadius: 6,
+                borderRadius: 7.5,
                 background: colors.buttonBg,
                 color: colors.textSecondary,
-                fontSize: 12,
+                fontSize: 15,
                 fontFamily: 'inherit',
                 cursor: 'pointer',
                 display: 'flex',
@@ -928,6 +1092,21 @@ export default function App() {
               }}
             >
               {isMobile ? "◇" : "◇ Select"}
+            </button>
+            <button
+              onClick={handleClearCanvas}
+              style={{
+                ...toolBtnStyle,
+                background: colors.buttonBg,
+                color: objects.length === 0 ? colors.textMuted : "#ef4444",
+                padding: isMobile ? "3px 6px" : "4px 10px",
+                fontSize: isMobile ? 10 : 12,
+                opacity: objects.length === 0 ? 0.5 : 1,
+              }}
+              title="Clear all objects"
+              disabled={objects.length === 0}
+            >
+              {isMobile ? "🗑" : "🗑 Clear"}
             </button>
             <span style={{ color: colors.borderDark }}>│</span>
             
@@ -1035,6 +1214,35 @@ export default function App() {
             </span>
             <div style={{ flex: 1 }} />
             <button 
+              onClick={undo}
+              disabled={undoStack.length === 0}
+              style={{
+                ...toolBtnStyle,
+                padding: isMobile ? "3px 6px" : "4px 10px",
+                fontSize: isMobile ? 10 : 12,
+                opacity: undoStack.length === 0 ? 0.5 : 1,
+                cursor: undoStack.length === 0 ? "not-allowed" : "pointer",
+              }}
+              title={`Undo${undoStack.length > 0 ? ` (${undoStack.length})` : ''}`}
+            >
+              {isMobile ? "↶" : "↶ Undo"}
+            </button>
+            <button 
+              onClick={redo}
+              disabled={redoStack.length === 0}
+              style={{
+                ...toolBtnStyle,
+                padding: isMobile ? "3px 6px" : "4px 10px",
+                fontSize: isMobile ? 10 : 12,
+                opacity: redoStack.length === 0 ? 0.5 : 1,
+                cursor: redoStack.length === 0 ? "not-allowed" : "pointer",
+                marginRight: isMobile ? 2 : 4,
+              }}
+              title={`Redo${redoStack.length > 0 ? ` (${redoStack.length})` : ''}`}
+            >
+              {isMobile ? "↷" : "↷ Redo"}
+            </button>
+            <button 
               onClick={() => setZoom((z) => Math.max(0.5, z - 0.1))} 
               style={{
                 ...toolBtnStyle,
@@ -1068,12 +1276,13 @@ export default function App() {
             onMouseMove={handleCanvasMouseMove}
             onMouseUp={handleCanvasMouseUp}
             onMouseLeave={handleCanvasMouseUp}
+            onDoubleClick={handleCanvasDoubleClick}
             style={{
               width: canvasWidth * zoom,
               height: canvasHeight * zoom,
               position: "relative",
               cursor: tool === "place" ? "crosshair" : dragState ? "grabbing" : "default",
-              margin: 20,
+              margin: 25,
             }}
           >
             {/* Grid background */}
@@ -1126,9 +1335,9 @@ export default function App() {
                 left: 0,
                 margin: 0,
                 padding: 0,
-                fontSize: 14 * zoom,
+                fontSize: 17.5 * zoom,
                 lineHeight: `${CELL_H * zoom}px`,
-                letterSpacing: CELL_W * zoom - 14 * zoom * 0.6 + "px",
+                letterSpacing: CELL_W * zoom - 17.5 * zoom * 0.6 + "px",
                 fontFamily: "'JetBrains Mono', 'SF Mono', 'Fira Code', monospace",
                 color: theme === 'light' ? '#111827' : '#e4e4e7',
                 pointerEvents: "none",
@@ -1138,6 +1347,76 @@ export default function App() {
             >
               {buffer.join("\n")}
             </pre>
+            
+            {/* Text editing overlay */}
+            {editingTextId && (
+              <textarea
+                value={editingText}
+                onChange={(e) => setEditingText(e.target.value)}
+                onBlur={() => {
+                  if (editingTextId && editingText.trim()) {
+                    const lines = editingText.split('\n');
+                    const data = { 
+                      lines, 
+                      w: Math.max(...lines.map(l => l.length)), 
+                      h: lines.length 
+                    };
+                    setObjectsWithHistory(prev => prev.map(obj => 
+                      obj.id === editingTextId 
+                        ? { ...obj, data }
+                        : obj
+                    ));
+                    notify("Text updated");
+                  }
+                  setEditingTextId(null);
+                  setEditingText("");
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                    if (editingTextId && editingText.trim()) {
+                      const lines = editingText.split('\n');
+                      const data = { 
+                        lines, 
+                        w: Math.max(...lines.map(l => l.length)), 
+                        h: lines.length 
+                      };
+                      setObjectsWithHistory(prev => prev.map(obj => 
+                        obj.id === editingTextId 
+                          ? { ...obj, data }
+                          : obj
+                      ));
+                      notify("Text updated");
+                    }
+                    setEditingTextId(null);
+                    setEditingText("");
+                  } else if (e.key === 'Escape') {
+                    setEditingTextId(null);
+                    setEditingText("");
+                  }
+                }}
+                style={{
+                  position: 'absolute',
+                  left: (objects.find(o => o.id === editingTextId)?.x || 0) * CELL_W * zoom,
+                  top: (objects.find(o => o.id === editingTextId)?.y || 0) * CELL_H * zoom,
+                  width: Math.max(100, (objects.find(o => o.id === editingTextId)?.data?.w || 10) * CELL_W * zoom),
+                  height: Math.max(20, (objects.find(o => o.id === editingTextId)?.data?.h || 1) * CELL_H * zoom),
+                  fontSize: 17.5 * zoom,
+                  fontFamily: "'JetBrains Mono', 'SF Mono', 'Fira Code', monospace",
+                  lineHeight: `${CELL_H * zoom}px`,
+                  letterSpacing: CELL_W * zoom - 17.5 * zoom * 0.6 + "px",
+                  border: `2px solid ${colors.selection}`,
+                  borderRadius: 2,
+                  background: colors.canvas,
+                  color: colors.text,
+                  resize: 'none',
+                  outline: 'none',
+                  zIndex: 20,
+                  padding: 0,
+                  margin: 0,
+                }}
+                autoFocus
+              />
+            )}
           </div>
         </div>
       </div>
@@ -1145,14 +1424,14 @@ export default function App() {
       {/* ─── Status Bar ──────────────────────────────────── */}
       <div
         style={{
-          height: 28,
+          height: 35,
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          padding: "0 16px",
+          padding: "0 20px",
           borderTop: `1px solid ${colors.border}`,
           background: colors.backgroundSecondary,
-          fontSize: 11,
+          fontSize: 13.75,
           color: colors.textMuted,
           flexShrink: 0,
         }}
@@ -1170,14 +1449,14 @@ export default function App() {
         <div
           style={{
             position: "fixed",
-            bottom: 44,
+            bottom: 55,
             left: "50%",
             transform: "translateX(-50%)",
             background: colors.buttonBg,
             color: colors.text,
-            padding: "8px 20px",
-            borderRadius: 6,
-            fontSize: 13,
+            padding: "10px 25px",
+            borderRadius: 7.5,
+            fontSize: 16.25,
             zIndex: 1000,
             border: `1px solid ${colors.borderDark}`,
             boxShadow: theme === 'light' ? "0 4px 20px #00000020" : "0 4px 20px #00000060",
@@ -1274,14 +1553,26 @@ export default function App() {
                 1. Click a component in the left panel<br/>
                 2. Click on the canvas to place it<br/>
                 3. Drag objects to reposition<br/>
-                4. Export → paste into your AI tool
+                4. Use toolbar buttons for undo/redo, zoom<br/>
+                5. Export → paste into your AI tool
+              </p>
+              <p style={{ margin: "0 0 12px" }}>
+                <strong style={{ color: colors.text }}>Text Editing:</strong><br/>
+                <kbd style={kbdStyle}>T</kbd> Text tool - click to add text<br/>
+                <strong>Double-click</strong> any text to edit<br/>
+                <kbd style={kbdStyle}>Enter</kbd> Edit selected text<br/>
+                <kbd style={kbdStyle}>Ctrl+Enter</kbd> Finish editing<br/>
+                <kbd style={kbdStyle}>Esc</kbd> Cancel editing
               </p>
               <p style={{ margin: "0 0 12px" }}>
                 <strong style={{ color: colors.text }}>Keyboard Shortcuts:</strong><br/>
                 <kbd style={kbdStyle}>Del</kbd> Delete selected<br/>
                 <kbd style={kbdStyle}>Esc</kbd> Deselect / close<br/>
                 <kbd style={kbdStyle}>⌘D</kbd> Duplicate<br/>
-                <kbd style={kbdStyle}>⌘S</kbd> Share URL
+                <kbd style={kbdStyle}>⌘S</kbd> Share URL<br/>
+                <kbd style={kbdStyle}>Ctrl+Shift+C</kbd> Clear canvas<br/>
+                <kbd style={kbdStyle}>Ctrl+Z</kbd> Undo<br/>
+                <kbd style={kbdStyle}>Ctrl+Shift+Z</kbd> or <kbd style={kbdStyle}>Ctrl+Y</kbd> Redo
               </p>
               <p style={{ margin: 0 }}>
                 <strong style={{ color: colors.text }}>Tips:</strong><br/>

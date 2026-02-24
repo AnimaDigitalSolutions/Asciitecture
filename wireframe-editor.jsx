@@ -1,8 +1,8 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 
 // ─── Constants ────────────────────────────────────────────────
-const CELL_W = 10;
-const CELL_H = 18;
+const CELL_W = 12.5;
+const CELL_H = 22.5;
 const COLS = 100;
 const ROWS = 50;
 
