@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { TEMPLATES, CATEGORIES } from "./lib/templates";
+import { DIAGRAM_TEMPLATES, DIAGRAM_CATEGORIES } from "./lib/diagram-templates";
 import { Storage } from "./lib/storage";
 import { exportMarkdown, copyToClipboard, downloadFile } from "./lib/export";
 
@@ -8,6 +9,9 @@ const CELL_W = 10;
 const CELL_H = 18;
 const COLS = 100;
 const ROWS = 50;
+
+// ─── Feature Flags ────────────────────────────────────────────
+const TABS_ENABLED = import.meta.env.VITE_FEATURE_TABS === 'true';
 
 // ─── Unique ID Generator ──────────────────────────────────────
 let _uid = 0;
@@ -43,7 +47,6 @@ function renderAllObjects(objects, cols, rows) {
 
 // ─── Main App ─────────────────────────────────────────────────
 export default function App() {
-  const [objects, setObjects] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
   const [tool, setTool] = useState("select");
   const [placingTemplate, setPlacingTemplate] = useState(null);
@@ -60,7 +63,42 @@ export default function App() {
     // Load theme from localStorage or default to light
     return localStorage.getItem('asciitecture_theme') || 'light';
   });
+  const [mode, setMode] = useState(() => {
+    // Load mode from localStorage or default to web
+    return localStorage.getItem('asciitecture_mode') || 'web';
+  });
+  // Tab state (only used if TABS_ENABLED)
+  const [tabs, setTabs] = useState(TABS_ENABLED ? [{ id: 1, name: 'Tab 1', objects: [] }] : null);
+  const [activeTab, setActiveTab] = useState(1);
+  const [editingTabId, setEditingTabId] = useState(null);
+  const [editingTabName, setEditingTabName] = useState('');
+  
+  // Simple objects state (used when tabs are disabled)
+  const [simpleObjects, setSimpleObjects] = useState([]);
+  
   const canvasRef = useRef(null);
+  
+  // Get objects based on whether tabs are enabled
+  const objects = useMemo(() => {
+    if (TABS_ENABLED) {
+      const currentTab = tabs?.find(tab => tab.id === activeTab) || tabs?.[0];
+      return currentTab?.objects || [];
+    }
+    return simpleObjects;
+  }, [tabs, activeTab, simpleObjects]);
+  
+  // Update objects based on whether tabs are enabled
+  const setObjects = useCallback((newObjects) => {
+    if (TABS_ENABLED) {
+      setTabs(prevTabs => prevTabs.map(tab => 
+        tab.id === activeTab 
+          ? { ...tab, objects: typeof newObjects === 'function' ? newObjects(tab.objects) : newObjects }
+          : tab
+      ));
+    } else {
+      setSimpleObjects(typeof newObjects === 'function' ? newObjects : newObjects);
+    }
+  }, [activeTab]);
 
   const selectedObj = useMemo(
     () => objects.find((o) => o.id === selectedId) || null,
@@ -80,6 +118,69 @@ export default function App() {
 
   const toggleTheme = useCallback(() => {
     setTheme(prev => prev === 'light' ? 'dark' : 'light');
+  }, []);
+
+  // ─── Mode handling ────────────────────────────────────────
+  useEffect(() => {
+    localStorage.setItem('asciitecture_mode', mode);
+  }, [mode]);
+  
+  // ─── Tab management ───────────────────────────────────────
+  const addTab = useCallback(() => {
+    if (!TABS_ENABLED) return;
+    if (tabs.length >= 3) {
+      setNotification("Only 3 tabs are supported");
+      setTimeout(() => setNotification(null), 2500);
+      return;
+    }
+    const newId = Math.max(...tabs.map(t => t.id)) + 1;
+    setTabs(prev => [...prev, { id: newId, name: `Tab ${newId}`, objects: [] }]);
+    setActiveTab(newId);
+  }, [tabs]);
+  
+  const deleteTab = useCallback((tabId) => {
+    if (!TABS_ENABLED) return;
+    if (tabs.length === 1) {
+      // Clear the only tab instead of deleting
+      setTabs([{ id: 1, name: 'Tab 1', objects: [] }]);
+      setSelectedId(null);
+      setNotification("Tab cleared");
+      setTimeout(() => setNotification(null), 2500);
+      return;
+    }
+    
+    setTabs(prev => prev.filter(tab => tab.id !== tabId));
+    if (activeTab === tabId) {
+      setActiveTab(tabs.find(t => t.id !== tabId)?.id || 1);
+    }
+    setSelectedId(null);
+    setNotification("Tab deleted");
+    setTimeout(() => setNotification(null), 2500);
+  }, [tabs, activeTab]);
+  
+  const startRenamingTab = useCallback((tabId, currentName) => {
+    if (!TABS_ENABLED) return;
+    setEditingTabId(tabId);
+    setEditingTabName(currentName);
+  }, []);
+  
+  const finishRenamingTab = useCallback(() => {
+    if (!TABS_ENABLED) return;
+    if (editingTabId !== null && editingTabName.trim()) {
+      setTabs(prev => prev.map(tab => 
+        tab.id === editingTabId 
+          ? { ...tab, name: editingTabName.trim() }
+          : tab
+      ));
+    }
+    setEditingTabId(null);
+    setEditingTabName('');
+  }, [editingTabId, editingTabName]);
+  
+  const cancelRenamingTab = useCallback(() => {
+    if (!TABS_ENABLED) return;
+    setEditingTabId(null);
+    setEditingTabName('');
   }, []);
 
   // ─── Load from URL or localStorage on mount ──────────────
@@ -152,10 +253,11 @@ export default function App() {
       const { col, row } = pixelToCell(e.clientX, e.clientY);
 
       if (tool === "place" && placingTemplate) {
-        const tmpl = TEMPLATES[placingTemplate];
+        const templates = mode === 'diagram' ? DIAGRAM_TEMPLATES : TEMPLATES;
+        const tmpl = templates[placingTemplate];
         if (tmpl) {
           const data = tmpl.create();
-          const newObj = { id: uid(), type: placingTemplate, x: col, y: row, data };
+          const newObj = { id: uid(), type: placingTemplate, x: col, y: row, data, mode };
           setObjects((prev) => [...prev, newObj]);
           setSelectedId(newObj.id);
           notify(`Placed ${tmpl.label}`);
@@ -232,11 +334,7 @@ export default function App() {
       }
       if (e.key === "s" && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
-        const shareUrl = Storage.shareViaURL(objects);
-        copyToClipboard(shareUrl, 
-          () => notify("Share URL copied to clipboard!"),
-          () => notify("Failed to copy URL")
-        );
+        notify("🚧 Share feature coming soon! Stay tuned...");
       }
     };
     window.addEventListener("keydown", handleKey);
@@ -279,12 +377,8 @@ export default function App() {
 
   // ─── Share URL ────────────────────────────────────────────
   const handleShare = useCallback(() => {
-    const shareUrl = Storage.shareViaURL(objects);
-    copyToClipboard(shareUrl,
-      () => notify("Share URL copied to clipboard!"),
-      () => notify("Failed to copy URL")
-    );
-  }, [objects, notify]);
+    notify("🚧 Share feature coming soon! Stay tuned...");
+  }, [notify]);
 
   // ─── Canvas rendering ────────────────────────────────────
   const canvasWidth = COLS * CELL_W;
@@ -293,13 +387,14 @@ export default function App() {
   // Group templates by category
   const groupedTemplates = useMemo(() => {
     const groups = {};
-    Object.entries(TEMPLATES).forEach(([key, tmpl]) => {
+    const templates = mode === 'diagram' ? DIAGRAM_TEMPLATES : TEMPLATES;
+    Object.entries(templates).forEach(([key, tmpl]) => {
       const cat = tmpl.category || "other";
       if (!groups[cat]) groups[cat] = [];
       groups[cat].push({ key, ...tmpl });
     });
     return groups;
-  }, []);
+  }, [mode]);
 
   // Theme colors
   const colors = theme === 'light' ? {
@@ -484,10 +579,63 @@ export default function App() {
           >
             ASCII Wireframes
           </span>
+          <div style={{ display: 'flex', gap: 0, marginLeft: 8 }}>
+            <button
+              onClick={() => setMode('web')}
+              style={{
+                padding: '2px 8px',
+                fontSize: 10,
+                border: `1px solid ${colors.borderDark}`,
+                borderTopLeftRadius: 4,
+                borderBottomLeftRadius: 4,
+                borderTopRightRadius: 0,
+                borderBottomRightRadius: 0,
+                background: mode === 'web' ? colors.selection : colors.buttonBg,
+                color: mode === 'web' ? '#fff' : colors.textMuted,
+                cursor: 'pointer',
+                transition: 'all 0.15s',
+                fontFamily: 'inherit',
+                letterSpacing: 0.5,
+              }}
+            >
+              WEB
+            </button>
+            <button
+              onClick={() => setMode('diagram')}
+              style={{
+                padding: '2px 8px',
+                fontSize: 10,
+                border: `1px solid ${colors.borderDark}`,
+                borderTopLeftRadius: 0,
+                borderBottomLeftRadius: 0,
+                borderTopRightRadius: 4,
+                borderBottomRightRadius: 4,
+                marginLeft: -1,
+                background: mode === 'diagram' ? colors.selection : colors.buttonBg,
+                color: mode === 'diagram' ? '#fff' : colors.textMuted,
+                cursor: 'pointer',
+                transition: 'all 0.15s',
+                fontFamily: 'inherit',
+                letterSpacing: 0.5,
+              }}
+            >
+              DIAGRAM
+            </button>
+          </div>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <button onClick={() => setShowHelp(true)} style={topBtnStyle}>? Help</button>
-          <button onClick={handleShare} style={topBtnStyle}>⇧ Share</button>
+          <button 
+            onClick={handleShare} 
+            style={{ 
+              ...topBtnStyle, 
+              opacity: 0.7,
+              cursor: "not-allowed"
+            }}
+            title="Coming soon!"
+          >
+            ⇧ Share
+          </button>
           <button onClick={() => setShowImport(true)} style={topBtnStyle}>↓ Import</button>
           <button onClick={handleExportMarkdown} style={{ ...topBtnStyle, background: "#3b82f6", color: "#fff" }}>
             ↑ Export MD
@@ -510,7 +658,7 @@ export default function App() {
           }}
         >
           <div style={{ flex: 1, overflowY: "auto", padding: "8px 0" }}>
-            {Object.entries(CATEGORIES).map(([catKey, cat]) => (
+            {Object.entries(mode === 'diagram' ? DIAGRAM_CATEGORIES : CATEGORIES).map(([catKey, cat]) => (
               <div key={catKey} style={{ marginBottom: 8 }}>
                 <div
                   style={{
@@ -620,6 +768,96 @@ export default function App() {
               ◇ Select
             </button>
             <span style={{ color: colors.borderDark }}>│</span>
+            
+            {/* Tab UI - only shown if TABS_ENABLED */}
+            {TABS_ENABLED && (
+              <>
+                <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                  {tabs.map((tab, index) => (
+                    <div key={tab.id} style={{ display: "flex", alignItems: "center" }}>
+                      {editingTabId === tab.id ? (
+                        <input
+                          type="text"
+                          value={editingTabName}
+                          onChange={(e) => setEditingTabName(e.target.value)}
+                          onBlur={cancelRenamingTab}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') finishRenamingTab();
+                            if (e.key === 'Escape') cancelRenamingTab();
+                          }}
+                          style={{
+                            ...toolBtnStyle,
+                            padding: "4px 8px",
+                            background: colors.inputBg,
+                            color: colors.text,
+                            borderRadius: tabs.length > 1 ? "4px 0 0 4px" : 4,
+                            marginRight: tabs.length > 1 ? 0 : 4,
+                            width: 80,
+                            outline: 'none',
+                            border: `2px solid ${colors.selection}`,
+                          }}
+                          autoFocus
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      ) : (
+                        <button
+                          onClick={() => setActiveTab(tab.id)}
+                          onDoubleClick={() => startRenamingTab(tab.id, tab.name)}
+                          style={{
+                            ...toolBtnStyle,
+                            padding: "4px 8px",
+                            background: activeTab === tab.id ? colors.selection : colors.buttonBg,
+                            color: activeTab === tab.id ? "#fff" : colors.textMuted,
+                            borderRadius: tabs.length > 1 ? "4px 0 0 4px" : 4,
+                            marginRight: tabs.length > 1 ? 0 : 4,
+                            minWidth: 60,
+                          }}
+                          title="Double-click to rename"
+                        >
+                          {tab.name}
+                        </button>
+                      )}
+                      {tabs.length > 1 && (
+                        <button
+                          onClick={() => deleteTab(tab.id)}
+                          style={{
+                            ...toolBtnStyle,
+                            padding: "4px 6px",
+                            background: activeTab === tab.id ? colors.selection : colors.buttonBg,
+                            color: activeTab === tab.id ? "#fff" : colors.textMuted,
+                            borderRadius: "0 4px 4px 0",
+                            borderLeft: "none",
+                            fontSize: 10,
+                            marginRight: index < tabs.length - 1 ? 4 : 0,
+                          }}
+                          title="Delete tab"
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  {tabs.length < 3 && (
+                    <button
+                      onClick={addTab}
+                      style={{
+                        ...toolBtnStyle,
+                        padding: "4px 8px",
+                        background: colors.buttonBg,
+                        color: colors.textMuted,
+                        fontSize: 14,
+                        fontWeight: "bold",
+                        marginLeft: 4,
+                      }}
+                      title="Add new tab"
+                    >
+                      +
+                    </button>
+                  )}
+                </div>
+                <span style={{ color: colors.borderDark }}>│</span>
+              </>
+            )}
             <span style={{ color: colors.textMuted }}>
               Ln {cursorPos.row + 1}, Col {cursorPos.col + 1}
             </span>
@@ -735,7 +973,7 @@ export default function App() {
       >
         <span>
           {tool === "place"
-            ? `Placing: ${TEMPLATES[placingTemplate]?.label || "?"} — click canvas to drop`
+            ? `Placing: ${(mode === 'diagram' ? DIAGRAM_TEMPLATES : TEMPLATES)[placingTemplate]?.label || "?"} — click canvas to drop`
             : "Select mode — click objects to move them"}
         </span>
         <span>⌘S to share • ⌘D to duplicate • Del to delete</span>
