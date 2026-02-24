@@ -215,9 +215,7 @@ MIT License - feel free to use this in your projects!
 
 Inspired by:
 - [excalidraw](https://excalidraw.com) - For the elegant simplicity
-- [oat.ink](https://oat.ink) - For the theme toggle placement
 - [ASCIIFlow](https://asciiflow.com) - For ASCII art inspiration
 
 ---
 
-Made with ❤️ for developers and AI assistants everywhere

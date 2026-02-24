@@ -3,12 +3,11 @@ import { TEMPLATES, CATEGORIES } from "./lib/templates";
 import { DIAGRAM_TEMPLATES, DIAGRAM_CATEGORIES } from "./lib/diagram-templates";
 import { Storage } from "./lib/storage";
 import { exportMarkdown, copyToClipboard, downloadFile } from "./lib/export";
+import { LayersPanel } from "./components/LayersPanel";
+import { Canvas } from "./components/Canvas";
+import { TemplateLibrary } from "./components/TemplateLibrary";
+import { useExportImport } from "./hooks/useExportImport";
 
-// ─── Constants ────────────────────────────────────────────────
-const CELL_W = 12.5;
-const CELL_H = 22.5;
-const COLS = 100;
-const ROWS = 50;
 
 // ─── Feature Flags ────────────────────────────────────────────
 const TABS_ENABLED = import.meta.env.VITE_FEATURE_TABS === 'true';
@@ -16,34 +15,6 @@ const TABS_ENABLED = import.meta.env.VITE_FEATURE_TABS === 'true';
 // ─── Unique ID Generator ──────────────────────────────────────
 let _uid = 0;
 const uid = () => `obj_${++_uid}_${Date.now()}`;
-
-// ─── Grid / Buffer Operations ─────────────────────────────────
-function createBuffer(cols, rows) {
-  return Array.from({ length: rows }, () => " ".repeat(cols));
-}
-
-function stampObject(buffer, obj) {
-  const { x, y, data } = obj;
-  const result = buffer.map((row) => row.split(""));
-  data.lines.forEach((line, dy) => {
-    for (let dx = 0; dx < line.length; dx++) {
-      const gx = x + dx;
-      const gy = y + dy;
-      if (gy >= 0 && gy < result.length && gx >= 0 && gx < (result[0]?.length || 0)) {
-        result[gy][gx] = line[dx];
-      }
-    }
-  });
-  return result.map((row) => row.join(""));
-}
-
-function renderAllObjects(objects, cols, rows) {
-  let buffer = createBuffer(cols, rows);
-  objects.forEach((obj) => {
-    buffer = stampObject(buffer, obj);
-  });
-  return buffer;
-}
 
 // ─── Main App ─────────────────────────────────────────────────
 export default function App() {
@@ -59,10 +30,6 @@ export default function App() {
   const [placingTemplate, setPlacingTemplate] = useState(null);
   const [dragState, setDragState] = useState(null);
   const [cursorPos, setCursorPos] = useState({ col: 0, row: 0 });
-  const [showMarkdown, setShowMarkdown] = useState(false);
-  const [markdownText, setMarkdownText] = useState("");
-  const [showImport, setShowImport] = useState(false);
-  const [importText, setImportText] = useState("");
   const [showHelp, setShowHelp] = useState(false);
   const [notification, setNotification] = useState(null);
   const [zoom, setZoom] = useState(1);
@@ -80,19 +47,36 @@ export default function App() {
   const [editingTabId, setEditingTabId] = useState(null);
   const [editingTabName, setEditingTabName] = useState('');
   
+  // Layers state
+  const [layers, setLayers] = useState([
+    { id: 1, name: 'Layer 1', visible: true, objects: [] },
+    { id: 2, name: 'Layer 2', visible: true, objects: [] },
+    { id: 3, name: 'Layer 3', visible: true, objects: [] }
+  ]);
+  const [activeLayer, setActiveLayer] = useState(1);
+  const [showLayers, setShowLayers] = useState(false);
+  const [editingLayerId, setEditingLayerId] = useState(null);
+  const [editingLayerName, setEditingLayerName] = useState('');
+  
   // Simple objects state (used when tabs are disabled)
   const [simpleObjects, setSimpleObjects] = useState([]);
   
   const canvasRef = useRef(null);
   
-  // Get objects based on whether tabs are enabled
+  // Get objects based on whether tabs are enabled, filtered by visible layers
   const objects = useMemo(() => {
+    let allObjects;
     if (TABS_ENABLED) {
       const currentTab = tabs?.find(tab => tab.id === activeTab) || tabs?.[0];
-      return currentTab?.objects || [];
+      allObjects = currentTab?.objects || [];
+    } else {
+      allObjects = simpleObjects;
     }
-    return simpleObjects;
-  }, [tabs, activeTab, simpleObjects]);
+    
+    // Filter by visible layers
+    const visibleLayers = layers.filter(layer => layer.visible).map(layer => layer.id);
+    return allObjects.filter(obj => visibleLayers.includes(obj.layerId || 1));
+  }, [tabs, activeTab, simpleObjects, layers]);
   
   // Update objects based on whether tabs are enabled
   const setObjects = useCallback((newObjects) => {
@@ -107,10 +91,6 @@ export default function App() {
     }
   }, [activeTab]);
 
-  const selectedObj = useMemo(
-    () => objects.find((o) => o.id === selectedId) || null,
-    [objects, selectedId]
-  );
 
   // ─── Undo/Redo Management ─────────────────────────────────
   const saveToHistory = useCallback((currentObjects) => {
@@ -132,6 +112,13 @@ export default function App() {
     setNotification(msg);
     setTimeout(() => setNotification(null), 2500);
   }, []);
+
+  // Use export/import hook
+  const {
+    showMarkdown, setShowMarkdown, markdownText,
+    showImport, setShowImport, importText, setImportText,
+    handleExportMarkdown, copyMarkdown, handleImport
+  } = useExportImport(objects, setObjectsWithHistory, notify, activeLayer);
 
   const undo = useCallback(() => {
     if (undoStack.length > 0) {
@@ -173,10 +160,6 @@ export default function App() {
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
-  const buffer = useMemo(
-    () => renderAllObjects(objects, COLS, ROWS),
-    [objects]
-  );
 
   // ─── Theme handling ───────────────────────────────────────
   useEffect(() => {
@@ -250,6 +233,85 @@ export default function App() {
     setEditingTabId(null);
     setEditingTabName('');
   }, []);
+  
+  // ─── Layer management ─────────────────────────────────────
+  const addLayer = useCallback(() => {
+    if (layers.length >= 3) {
+      notify("Maximum 3 layers supported");
+      return;
+    }
+    const newId = Math.max(...layers.map(l => l.id)) + 1;
+    setLayers(prev => [...prev, { id: newId, name: `Layer ${newId}`, visible: true, objects: [] }]);
+    setActiveLayer(newId);
+    notify("Layer added");
+  }, [layers, notify]);
+  
+  const deleteLayer = useCallback((layerId) => {
+    if (layers.length === 1) {
+      notify("Cannot delete the last layer");
+      return;
+    }
+    
+    // Move all objects from deleted layer to Layer 1
+    const getAllObjects = () => {
+      if (TABS_ENABLED) {
+        const currentTab = tabs?.find(tab => tab.id === activeTab) || tabs?.[0];
+        return currentTab?.objects || [];
+      }
+      return simpleObjects;
+    };
+    
+    const allObjects = getAllObjects();
+    const updatedObjects = allObjects.map(obj => 
+      obj.layerId === layerId ? { ...obj, layerId: 1 } : obj
+    );
+    
+    if (TABS_ENABLED) {
+      setTabs(prevTabs => prevTabs.map(tab => 
+        tab.id === activeTab 
+          ? { ...tab, objects: updatedObjects }
+          : tab
+      ));
+    } else {
+      setSimpleObjects(updatedObjects);
+    }
+    
+    setLayers(prev => prev.filter(layer => layer.id !== layerId));
+    if (activeLayer === layerId) {
+      setActiveLayer(layers.find(l => l.id !== layerId)?.id || 1);
+    }
+    notify("Layer deleted");
+  }, [layers, activeLayer, tabs, activeTab, simpleObjects, notify]);
+  
+  const toggleLayerVisibility = useCallback((layerId) => {
+    setLayers(prev => prev.map(layer => 
+      layer.id === layerId 
+        ? { ...layer, visible: !layer.visible }
+        : layer
+    ));
+  }, []);
+  
+  const startRenamingLayer = useCallback((layerId, currentName) => {
+    setEditingLayerId(layerId);
+    setEditingLayerName(currentName);
+  }, []);
+  
+  const finishRenamingLayer = useCallback(() => {
+    if (editingLayerId !== null && editingLayerName.trim()) {
+      setLayers(prev => prev.map(layer => 
+        layer.id === editingLayerId 
+          ? { ...layer, name: editingLayerName.trim() }
+          : layer
+      ));
+    }
+    setEditingLayerId(null);
+    setEditingLayerName('');
+  }, [editingLayerId, editingLayerName]);
+  
+  const cancelRenamingLayer = useCallback(() => {
+    setEditingLayerId(null);
+    setEditingLayerName('');
+  }, []);
 
   // ─── Load from URL or localStorage on mount ──────────────
   useEffect(() => {
@@ -274,111 +336,7 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [objects]);
 
-  // ─── Canvas pixel → grid cell ─────────────────────────────
-  const pixelToCell = useCallback(
-    (px, py) => {
-      const canvas = canvasRef.current;
-      if (!canvas) return { col: 0, row: 0 };
-      const rect = canvas.getBoundingClientRect();
-      const x = (px - rect.left) / zoom;
-      const y = (py - rect.top) / zoom;
-      return {
-        col: Math.floor(x / CELL_W),
-        row: Math.floor(y / CELL_H),
-      };
-    },
-    [zoom]
-  );
 
-  // ─── Hit test ─────────────────────────────────────────────
-  const hitTest = useCallback(
-    (col, row) => {
-      for (let i = objects.length - 1; i >= 0; i--) {
-        const o = objects[i];
-        if (
-          col >= o.x &&
-          col < o.x + o.data.w &&
-          row >= o.y &&
-          row < o.y + o.data.h
-        ) {
-          return o;
-        }
-      }
-      return null;
-    },
-    [objects]
-  );
-
-  // ─── Mouse handlers ──────────────────────────────────────
-  const handleCanvasMouseDown = useCallback(
-    (e) => {
-      const { col, row } = pixelToCell(e.clientX, e.clientY);
-
-      if (tool === "place" && placingTemplate) {
-        const templates = mode === 'diagram' ? DIAGRAM_TEMPLATES : TEMPLATES;
-        const tmpl = templates[placingTemplate];
-        if (tmpl) {
-          const data = tmpl.create();
-          const newObj = { id: uid(), type: placingTemplate, x: col, y: row, data, mode };
-          setObjectsWithHistory((prev) => [...prev, newObj]);
-          setSelectedId(newObj.id);
-          setTool("select");
-          setPlacingTemplate(null);
-          notify(`Placed ${tmpl.label}`);
-        }
-        return;
-      }
-
-      const hit = hitTest(col, row);
-      if (hit) {
-        setSelectedId(hit.id);
-        setDragState({ id: hit.id, startCol: col, startRow: row, origX: hit.x, origY: hit.y });
-      } else {
-        setSelectedId(null);
-      }
-    },
-    [tool, placingTemplate, pixelToCell, hitTest, notify, mode, setObjectsWithHistory]
-  );
-
-  const handleCanvasMouseMove = useCallback(
-    (e) => {
-      const { col, row } = pixelToCell(e.clientX, e.clientY);
-      setCursorPos({ col, row });
-
-      if (dragState) {
-        const dx = col - dragState.startCol;
-        const dy = row - dragState.startRow;
-        setObjectsWithHistory((prev) =>
-          prev.map((o) =>
-            o.id === dragState.id
-              ? { ...o, x: Math.max(0, dragState.origX + dx), y: Math.max(0, dragState.origY + dy) }
-              : o
-          )
-        );
-      }
-    },
-    [dragState, pixelToCell, setObjectsWithHistory]
-  );
-
-  const handleCanvasMouseUp = useCallback(() => {
-    setDragState(null);
-  }, []);
-
-  const handleCanvasDoubleClick = useCallback(
-    (e) => {
-      const { col, row } = pixelToCell(e.clientX, e.clientY);
-      const hit = hitTest(col, row);
-      if (hit) {
-        const obj = objects.find(o => o.id === hit.id);
-        if (obj && obj.data && obj.data.lines) {
-          setEditingTextId(hit.id);
-          setEditingText(obj.data.lines.join('\n'));
-          setSelectedId(hit.id);
-        }
-      }
-    },
-    [pixelToCell, hitTest, objects, setEditingTextId, setEditingText, setSelectedId]
-  );
 
   // ─── Keyboard shortcuts ───────────────────────────────────
   useEffect(() => {
@@ -416,7 +374,7 @@ export default function App() {
         if (selectedId) {
           const obj = objects.find((o) => o.id === selectedId);
           if (obj) {
-            const dup = { ...obj, id: uid(), x: obj.x + 2, y: obj.y + 2, data: { ...obj.data, lines: [...obj.data.lines] } };
+            const dup = { ...obj, id: uid(), x: obj.x + 2, y: obj.y + 2, data: { ...obj.data, lines: [...obj.data.lines] }, layerId: activeLayer };
             setObjectsWithHistory((prev) => [...prev, dup]);
             setSelectedId(dup.id);
             notify("Duplicated");
@@ -451,19 +409,6 @@ export default function App() {
     return () => window.removeEventListener("keydown", handleKey);
   }, [selectedId, objects, notify, setObjectsWithHistory, setSelectedId, setPlacingTemplate, editingTextId, setEditingTextId, setEditingText, undo, redo]);
 
-  // ─── Export markdown ──────────────────────────────────────
-  const handleExportMarkdown = useCallback(() => {
-    const md = exportMarkdown(objects, COLS, ROWS);
-    setMarkdownText(md);
-    setShowMarkdown(true);
-  }, [objects]);
-
-  const copyMarkdown = useCallback(() => {
-    copyToClipboard(markdownText,
-      () => notify("Copied to clipboard!"),
-      () => notify("Failed to copy")
-    );
-  }, [markdownText, notify]);
 
   // ─── Clear canvas ─────────────────────────────────────────
   const handleClearCanvas = useCallback(() => {
@@ -516,27 +461,15 @@ export default function App() {
     const defaultText = "Edit me";
     const lines = [defaultText];
     const data = { lines, w: defaultText.length, h: 1 };
-    const newObj = { id: uid(), type: "text", x: col, y: row, data };
+    const newObj = { id: uid(), type: "text", x: col, y: row, data, layerId: activeLayer };
     setObjectsWithHistory(prev => [...prev, newObj]);
     setSelectedId(newObj.id);
     // Start editing immediately
     setTimeout(() => startEditingText(newObj.id), 100);
     setTool("select");
     notify("Text added");
-  }, [startEditingText, notify]);
+  }, [startEditingText, notify, activeLayer]);
 
-  // ─── Import ────────────────────────────────────────────────
-  const handleImport = useCallback(() => {
-    let text = importText;
-    text = text.replace(/^```\n?/, "").replace(/\n?```$/, "");
-    const lines = text.split("\n");
-    const data = { lines, w: Math.max(...lines.map((l) => l.length)), h: lines.length };
-    const newObj = { id: uid(), type: "imported", x: 2, y: 2, data };
-    setObjectsWithHistory((prev) => [...prev, newObj]);
-    setShowImport(false);
-    setImportText("");
-    notify("Imported wireframe");
-  }, [importText, notify]);
 
   // ─── Template placement ───────────────────────────────────
   const startPlace = useCallback((templateKey) => {
@@ -550,21 +483,7 @@ export default function App() {
     notify("🚧 Share feature coming soon! Stay tuned...");
   }, [notify]);
 
-  // ─── Canvas rendering ────────────────────────────────────
-  const canvasWidth = COLS * CELL_W;
-  const canvasHeight = ROWS * CELL_H;
 
-  // Group templates by category
-  const groupedTemplates = useMemo(() => {
-    const groups = {};
-    const templates = mode === 'diagram' ? DIAGRAM_TEMPLATES : TEMPLATES;
-    Object.entries(templates).forEach(([key, tmpl]) => {
-      const cat = tmpl.category || "other";
-      if (!groups[cat]) groups[cat] = [];
-      groups[cat].push({ key, ...tmpl });
-    });
-    return groups;
-  }, [mode]);
 
   // Theme colors
   const colors = theme === 'light' ? {
@@ -843,205 +762,23 @@ export default function App() {
       {/* ─── Main Area ────────────────────────────────────── */}
       <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
         {/* ─── Left Panel ────────────────────────────────── */}
-        <div
-          style={{
-            width: isMobile ? (showMobileMenu ? "350px" : "0px") : 275,
-            borderRight: `1px solid ${colors.border}`,
-            background: colors.backgroundSecondary,
-            display: "flex",
-            flexDirection: "column",
-            flexShrink: 0,
-            overflow: "hidden",
-            position: isMobile ? "fixed" : "static",
-            top: isMobile ? 48 : "auto",
-            left: 0,
-            bottom: isMobile ? 0 : "auto",
-            zIndex: isMobile ? 50 : "auto",
-            transition: isMobile ? "width 0.3s ease" : "none",
-            transform: isMobile ? (showMobileMenu ? "translateX(0)" : "translateX(-100%)") : "none",
-          }}
-        >
-          <div style={{ flex: 1, overflowY: "auto", padding: "10px 0" }}>
-            {Object.entries(mode === 'diagram' ? DIAGRAM_CATEGORIES : CATEGORIES).map(([catKey, cat]) => (
-              <div key={catKey} style={{ marginBottom: 8 }}>
-                <div
-                  style={{
-                    padding: "5px 15px",
-                    fontSize: 12.5,
-                    color: colors.categoryColors[catKey] || colors.textMuted,
-                    textTransform: "uppercase",
-                    letterSpacing: 1.5,
-                    fontWeight: 600,
-                  }}
-                >
-                  {cat.label}
-                </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 5, padding: "0 10px" }}>
-                  {(groupedTemplates[catKey] || []).map((tmpl) => (
-                    <button
-                      key={tmpl.key}
-                      onClick={() => startPlace(tmpl.key)}
-                      title={tmpl.label}
-                      style={{
-                        width: 117.5,
-                        padding: "7.5px 5px",
-                        border:
-                          placingTemplate === tmpl.key
-                            ? "1px solid #3b82f6"
-                            : `1px solid ${colors.borderDark}`,
-                        borderRadius: 6.25,
-                        background:
-                          placingTemplate === tmpl.key ? "#3b82f620" : colors.buttonBg,
-                        color: colors.textSecondary,
-                        fontSize: 13.75,
-                        fontFamily: "inherit",
-                        cursor: "pointer",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 4,
-                        transition: "all 0.15s",
-                      }}
-                    >
-                      <span style={{ fontSize: 14, flexShrink: 0 }}>{tmpl.icon}</span>
-                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {tmpl.label}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-          
-          {/* Mobile Mode Toggle */}
-          {isMobile && (
-            <div style={{ 
-              borderTop: `1px solid ${colors.border}`,
-              padding: '12px'
-            }}>
-              <div style={{ marginBottom: 12 }}>
-                <div style={{
-                  fontSize: 12.5,
-                  color: colors.textMuted,
-                  textTransform: 'uppercase',
-                  letterSpacing: 1,
-                  marginBottom: 10
-                }}>
-                  Mode
-                </div>
-                <div style={{ display: 'flex', gap: 0 }}>
-                  <button
-                    onClick={() => setMode('web')}
-                    style={{
-                      flex: 1,
-                      padding: '6px 8px',
-                      fontSize: 13.75,
-                      border: `1px solid ${colors.borderDark}`,
-                      borderTopLeftRadius: 4,
-                      borderBottomLeftRadius: 4,
-                      borderTopRightRadius: 0,
-                      borderBottomRightRadius: 0,
-                      background: mode === 'web' ? colors.selection : colors.buttonBg,
-                      color: mode === 'web' ? '#fff' : colors.textMuted,
-                      cursor: 'pointer',
-                      transition: 'all 0.15s',
-                      fontFamily: 'inherit',
-                    }}
-                  >
-                    WEB
-                  </button>
-                  <button
-                    onClick={() => setMode('diagram')}
-                    style={{
-                      flex: 1,
-                      padding: '6px 8px',
-                      fontSize: 13.75,
-                      border: `1px solid ${colors.borderDark}`,
-                      borderTopLeftRadius: 0,
-                      borderBottomLeftRadius: 0,
-                      borderTopRightRadius: 4,
-                      borderBottomRightRadius: 4,
-                      marginLeft: -1,
-                      background: mode === 'diagram' ? colors.selection : colors.buttonBg,
-                      color: mode === 'diagram' ? '#fff' : colors.textMuted,
-                      cursor: 'pointer',
-                      transition: 'all 0.15s',
-                      fontFamily: 'inherit',
-                    }}
-                  >
-                    DIAGRAM
-                  </button>
-                </div>
-              </div>
-              <div style={{ marginBottom: 12 }}>
-                <div style={{
-                  fontSize: 12.5,
-                  color: colors.textMuted,
-                  textTransform: 'uppercase',
-                  letterSpacing: 1,
-                  marginBottom: 10
-                }}>
-                  Actions
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <button onClick={() => { setShowHelp(true); setShowMobileMenu(false); }} style={{
-                    ...topBtnStyle,
-                    width: '100%',
-                    justifyContent: 'center'
-                  }}>
-                    ? Help
-                  </button>
-                  <button onClick={() => { setShowImport(true); setShowMobileMenu(false); }} style={{
-                    ...topBtnStyle,
-                    width: '100%',
-                    justifyContent: 'center'
-                  }}>
-                    ↓ Import
-                  </button>
-                  <button onClick={() => { handleClearCanvas(); setShowMobileMenu(false); }} style={{
-                    ...topBtnStyle,
-                    width: '100%',
-                    justifyContent: 'center',
-                    color: objects.length === 0 ? colors.textMuted : "#ef4444",
-                    opacity: objects.length === 0 ? 0.5 : 1,
-                  }}
-                  disabled={objects.length === 0}>
-                    🗑 Clear Canvas
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Theme Toggle at Bottom */}
-          <div style={{ 
-            borderTop: `1px solid ${colors.border}`,
-            padding: '12px'
-          }}>
-            <button
-              onClick={toggleTheme}
-              style={{
-                width: '100%',
-                padding: '8px 12px',
-                border: `1px solid ${colors.borderDark}`,
-                borderRadius: 7.5,
-                background: colors.buttonBg,
-                color: colors.textSecondary,
-                fontSize: 15,
-                fontFamily: 'inherit',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 8,
-                transition: 'all 0.15s',
-              }}
-              title={`Switch to ${theme === 'light' ? 'dark' : 'light'} theme`}
-            >
-              {theme === 'light' ? '🌙' : '☀️'} Switch theme
-            </button>
-          </div>
-        </div>
+        <TemplateLibrary
+          mode={mode}
+          setMode={setMode}
+          placingTemplate={placingTemplate}
+          startPlace={startPlace}
+          showMobileMenu={showMobileMenu}
+          setShowMobileMenu={setShowMobileMenu}
+          isMobile={isMobile}
+          theme={theme}
+          colors={colors}
+          topBtnStyle={topBtnStyle}
+          handleClearCanvas={handleClearCanvas}
+          setShowHelp={setShowHelp}
+          setShowImport={setShowImport}
+          objects={objects}
+          toggleTheme={toggleTheme}
+        />
 
         {/* ─── Mobile Overlay ──────────────────────────────── */}
         {isMobile && showMobileMenu && (
@@ -1064,6 +801,33 @@ export default function App() {
           background: colors.canvas,
           marginLeft: isMobile ? 0 : "auto"
         }}>
+          {/* Layers Panel */}
+          <LayersPanel
+            showLayers={showLayers}
+            setShowLayers={setShowLayers}
+            layers={layers}
+            activeLayer={activeLayer}
+            setActiveLayer={setActiveLayer}
+            editingLayerId={editingLayerId}
+            editingLayerName={editingLayerName}
+            setEditingLayerName={setEditingLayerName}
+            startRenamingLayer={startRenamingLayer}
+            finishRenamingLayer={finishRenamingLayer}
+            cancelRenamingLayer={cancelRenamingLayer}
+            toggleLayerVisibility={toggleLayerVisibility}
+            deleteLayer={deleteLayer}
+            addLayer={addLayer}
+            selectedId={selectedId}
+            setSelectedId={setSelectedId}
+            objects={objects}
+            colors={colors}
+            isMobile={isMobile}
+            TABS_ENABLED={TABS_ENABLED}
+            tabs={tabs}
+            activeTab={activeTab}
+            simpleObjects={simpleObjects}
+            inspBtnStyle={inspBtnStyle}
+          />
           {/* Toolbar strip */}
           <div
             style={{
@@ -1213,6 +977,19 @@ export default function App() {
               {isMobile ? `${objects.length}` : `${objects.length} objects`}
             </span>
             <div style={{ flex: 1 }} />
+            <button
+              onClick={() => setShowLayers(!showLayers)}
+              style={{
+                ...toolBtnStyle,
+                background: showLayers ? colors.selection : colors.buttonBg,
+                color: showLayers ? "#fff" : colors.textMuted,
+                padding: isMobile ? "3px 6px" : "4px 10px",
+                fontSize: isMobile ? 10 : 12,
+              }}
+              title="Toggle layers panel"
+            >
+              {isMobile ? "L" : "🗂 Layers"}
+            </button>
             <button 
               onClick={undo}
               disabled={undoStack.length === 0}
@@ -1270,154 +1047,31 @@ export default function App() {
           </div>
 
           {/* Canvas area */}
-          <div
-            ref={canvasRef}
-            onMouseDown={handleCanvasMouseDown}
-            onMouseMove={handleCanvasMouseMove}
-            onMouseUp={handleCanvasMouseUp}
-            onMouseLeave={handleCanvasMouseUp}
-            onDoubleClick={handleCanvasDoubleClick}
-            style={{
-              width: canvasWidth * zoom,
-              height: canvasHeight * zoom,
-              position: "relative",
-              cursor: tool === "place" ? "crosshair" : dragState ? "grabbing" : "default",
-              margin: 25,
-            }}
-          >
-            {/* Grid background */}
-            <svg
-              width={canvasWidth * zoom}
-              height={canvasHeight * zoom}
-              style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none" }}
-            >
-              <defs>
-                <pattern
-                  id="grid"
-                  width={CELL_W * zoom}
-                  height={CELL_H * zoom}
-                  patternUnits="userSpaceOnUse"
-                >
-                  <rect
-                    width={CELL_W * zoom}
-                    height={CELL_H * zoom}
-                    fill="none"
-                    stroke={colors.grid}
-                    strokeWidth="0.5"
-                  />
-                </pattern>
-              </defs>
-              <rect width="100%" height="100%" fill="url(#grid)" />
-            </svg>
-
-            {/* Selection highlight */}
-            {selectedObj && (
-              <div
-                style={{
-                  position: "absolute",
-                  left: selectedObj.x * CELL_W * zoom - 2,
-                  top: selectedObj.y * CELL_H * zoom - 2,
-                  width: selectedObj.data.w * CELL_W * zoom + 4,
-                  height: selectedObj.data.h * CELL_H * zoom + 4,
-                  border: `2px solid ${colors.selection}`,
-                  borderRadius: 2,
-                  pointerEvents: "none",
-                  boxShadow: `0 0 12px ${colors.selection}20`,
-                }}
-              />
-            )}
-
-            {/* Rendered text */}
-            <pre
-              style={{
-                position: "absolute",
-                top: 0,
-                left: 0,
-                margin: 0,
-                padding: 0,
-                fontSize: 17.5 * zoom,
-                lineHeight: `${CELL_H * zoom}px`,
-                letterSpacing: CELL_W * zoom - 17.5 * zoom * 0.6 + "px",
-                fontFamily: "'JetBrains Mono', 'SF Mono', 'Fira Code', monospace",
-                color: theme === 'light' ? '#111827' : '#e4e4e7',
-                pointerEvents: "none",
-                userSelect: "none",
-                whiteSpace: "pre",
-              }}
-            >
-              {buffer.join("\n")}
-            </pre>
-            
-            {/* Text editing overlay */}
-            {editingTextId && (
-              <textarea
-                value={editingText}
-                onChange={(e) => setEditingText(e.target.value)}
-                onBlur={() => {
-                  if (editingTextId && editingText.trim()) {
-                    const lines = editingText.split('\n');
-                    const data = { 
-                      lines, 
-                      w: Math.max(...lines.map(l => l.length)), 
-                      h: lines.length 
-                    };
-                    setObjectsWithHistory(prev => prev.map(obj => 
-                      obj.id === editingTextId 
-                        ? { ...obj, data }
-                        : obj
-                    ));
-                    notify("Text updated");
-                  }
-                  setEditingTextId(null);
-                  setEditingText("");
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-                    if (editingTextId && editingText.trim()) {
-                      const lines = editingText.split('\n');
-                      const data = { 
-                        lines, 
-                        w: Math.max(...lines.map(l => l.length)), 
-                        h: lines.length 
-                      };
-                      setObjectsWithHistory(prev => prev.map(obj => 
-                        obj.id === editingTextId 
-                          ? { ...obj, data }
-                          : obj
-                      ));
-                      notify("Text updated");
-                    }
-                    setEditingTextId(null);
-                    setEditingText("");
-                  } else if (e.key === 'Escape') {
-                    setEditingTextId(null);
-                    setEditingText("");
-                  }
-                }}
-                style={{
-                  position: 'absolute',
-                  left: (objects.find(o => o.id === editingTextId)?.x || 0) * CELL_W * zoom,
-                  top: (objects.find(o => o.id === editingTextId)?.y || 0) * CELL_H * zoom,
-                  width: Math.max(100, (objects.find(o => o.id === editingTextId)?.data?.w || 10) * CELL_W * zoom),
-                  height: Math.max(20, (objects.find(o => o.id === editingTextId)?.data?.h || 1) * CELL_H * zoom),
-                  fontSize: 17.5 * zoom,
-                  fontFamily: "'JetBrains Mono', 'SF Mono', 'Fira Code', monospace",
-                  lineHeight: `${CELL_H * zoom}px`,
-                  letterSpacing: CELL_W * zoom - 17.5 * zoom * 0.6 + "px",
-                  border: `2px solid ${colors.selection}`,
-                  borderRadius: 2,
-                  background: colors.canvas,
-                  color: colors.text,
-                  resize: 'none',
-                  outline: 'none',
-                  zIndex: 20,
-                  padding: 0,
-                  margin: 0,
-                }}
-                autoFocus
-              />
-            )}
-          </div>
+          <Canvas
+            objects={objects}
+            setObjectsWithHistory={setObjectsWithHistory}
+            selectedId={selectedId}
+            setSelectedId={setSelectedId}
+            tool={tool}
+            setTool={setTool}
+            placingTemplate={placingTemplate}
+            setPlacingTemplate={setPlacingTemplate}
+            dragState={dragState}
+            setDragState={setDragState}
+            cursorPos={cursorPos}
+            setCursorPos={setCursorPos}
+            editingTextId={editingTextId}
+            setEditingTextId={setEditingTextId}
+            editingText={editingText}
+            setEditingText={setEditingText}
+            notify={notify}
+            zoom={zoom}
+            theme={theme}
+            colors={colors}
+            mode={mode}
+            activeLayer={activeLayer}
+            isMobile={isMobile}
+          />
         </div>
       </div>
 
