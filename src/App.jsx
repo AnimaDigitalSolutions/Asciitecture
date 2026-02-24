@@ -48,6 +48,8 @@ function renderAllObjects(objects, cols, rows) {
 // ─── Main App ─────────────────────────────────────────────────
 export default function App() {
   const [selectedId, setSelectedId] = useState(null);
+  const [showMobileMenu, setShowMobileMenu] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
   const [tool, setTool] = useState("select");
   const [placingTemplate, setPlacingTemplate] = useState(null);
   const [dragState, setDragState] = useState(null);
@@ -104,6 +106,20 @@ export default function App() {
     () => objects.find((o) => o.id === selectedId) || null,
     [objects, selectedId]
   );
+
+  // ─── Mobile Detection ─────────────────────────────────────
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth <= 768);
+      if (window.innerWidth > 768) {
+        setShowMobileMenu(false);
+      }
+    };
+    
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
 
   const buffer = useMemo(
     () => renderAllObjects(objects, COLS, ROWS),
@@ -564,81 +580,108 @@ export default function App() {
           flexShrink: 0,
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={{ fontSize: 18, fontWeight: 700, color: colors.text, letterSpacing: -0.5 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 8 : 12 }}>
+          {isMobile && (
+            <button
+              onClick={() => setShowMobileMenu(!showMobileMenu)}
+              style={{
+                ...topBtnStyle,
+                padding: "8px",
+                fontSize: 16,
+                background: showMobileMenu ? colors.selection : colors.buttonBg,
+                color: showMobileMenu ? "#fff" : colors.textMuted,
+              }}
+              title="Toggle menu"
+            >
+              ☰
+            </button>
+          )}
+          <span style={{ fontSize: isMobile ? 16 : 18, fontWeight: 700, color: colors.text, letterSpacing: -0.5 }}>
             ◻ Asciitecture
           </span>
-          <span
-            style={{
-              fontSize: 10,
-              padding: "2px 6px",
-              background: colors.borderDark,
-              borderRadius: 4,
-              color: colors.textMuted,
-            }}
-          >
-            ASCII Wireframes
-          </span>
-          <div style={{ display: 'flex', gap: 0, marginLeft: 8 }}>
-            <button
-              onClick={() => setMode('web')}
-              style={{
-                padding: '2px 8px',
-                fontSize: 10,
-                border: `1px solid ${colors.borderDark}`,
-                borderTopLeftRadius: 4,
-                borderBottomLeftRadius: 4,
-                borderTopRightRadius: 0,
-                borderBottomRightRadius: 0,
-                background: mode === 'web' ? colors.selection : colors.buttonBg,
-                color: mode === 'web' ? '#fff' : colors.textMuted,
-                cursor: 'pointer',
-                transition: 'all 0.15s',
-                fontFamily: 'inherit',
-                letterSpacing: 0.5,
-              }}
-            >
-              WEB
-            </button>
-            <button
-              onClick={() => setMode('diagram')}
-              style={{
-                padding: '2px 8px',
-                fontSize: 10,
-                border: `1px solid ${colors.borderDark}`,
-                borderTopLeftRadius: 0,
-                borderBottomLeftRadius: 0,
-                borderTopRightRadius: 4,
-                borderBottomRightRadius: 4,
-                marginLeft: -1,
-                background: mode === 'diagram' ? colors.selection : colors.buttonBg,
-                color: mode === 'diagram' ? '#fff' : colors.textMuted,
-                cursor: 'pointer',
-                transition: 'all 0.15s',
-                fontFamily: 'inherit',
-                letterSpacing: 0.5,
-              }}
-            >
-              DIAGRAM
-            </button>
-          </div>
+          {!isMobile && (
+            <>
+              <span
+                style={{
+                  fontSize: 10,
+                  padding: "2px 6px",
+                  background: colors.borderDark,
+                  borderRadius: 4,
+                  color: colors.textMuted,
+                }}
+              >
+                ASCII Wireframes
+              </span>
+              <div style={{ display: 'flex', gap: 0, marginLeft: 8 }}>
+                <button
+                  onClick={() => setMode('web')}
+                  style={{
+                    padding: '2px 8px',
+                    fontSize: 10,
+                    border: `1px solid ${colors.borderDark}`,
+                    borderTopLeftRadius: 4,
+                    borderBottomLeftRadius: 4,
+                    borderTopRightRadius: 0,
+                    borderBottomRightRadius: 0,
+                    background: mode === 'web' ? colors.selection : colors.buttonBg,
+                    color: mode === 'web' ? '#fff' : colors.textMuted,
+                    cursor: 'pointer',
+                    transition: 'all 0.15s',
+                    fontFamily: 'inherit',
+                    letterSpacing: 0.5,
+                  }}
+                >
+                  WEB
+                </button>
+                <button
+                  onClick={() => setMode('diagram')}
+                  style={{
+                    padding: '2px 8px',
+                    fontSize: 10,
+                    border: `1px solid ${colors.borderDark}`,
+                    borderTopLeftRadius: 0,
+                    borderBottomLeftRadius: 0,
+                    borderTopRightRadius: 4,
+                    borderBottomRightRadius: 4,
+                    marginLeft: -1,
+                    background: mode === 'diagram' ? colors.selection : colors.buttonBg,
+                    color: mode === 'diagram' ? '#fff' : colors.textMuted,
+                    cursor: 'pointer',
+                    transition: 'all 0.15s',
+                    fontFamily: 'inherit',
+                    letterSpacing: 0.5,
+                  }}
+                >
+                  DIAGRAM
+                </button>
+              </div>
+            </>
+          )}
         </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <button onClick={() => setShowHelp(true)} style={topBtnStyle}>? Help</button>
-          <button 
-            onClick={handleShare} 
-            style={{ 
-              ...topBtnStyle, 
-              opacity: 0.7,
-              cursor: "not-allowed"
-            }}
-            title="Coming soon!"
-          >
-            ⇧ Share
-          </button>
-          <button onClick={() => setShowImport(true)} style={topBtnStyle}>↓ Import</button>
-          <button onClick={handleExportMarkdown} style={{ ...topBtnStyle, background: "#3b82f6", color: "#fff" }}>
-            ↑ Export MD
+        <div style={{ display: "flex", gap: isMobile ? 4 : 8, alignItems: "center" }}>
+          {!isMobile && <button onClick={() => setShowHelp(true)} style={topBtnStyle}>? Help</button>}
+          {!isMobile && (
+            <button 
+              onClick={handleShare} 
+              style={{ 
+                ...topBtnStyle, 
+                opacity: 0.7,
+                cursor: "not-allowed"
+              }}
+              title="Coming soon!"
+            >
+              ⇧ Share
+            </button>
+          )}
+          {!isMobile && <button onClick={() => setShowImport(true)} style={topBtnStyle}>↓ Import</button>}
+          <button onClick={handleExportMarkdown} style={{ 
+            ...topBtnStyle, 
+            background: "#3b82f6", 
+            color: "#fff",
+            fontSize: isMobile ? 11 : 12,
+            padding: isMobile ? "4px 8px" : "6px 12px"
+          }}>
+            {isMobile ? "↑" : "↑ Export MD"}
           </button>
         </div>
       </div>
@@ -648,13 +691,20 @@ export default function App() {
         {/* ─── Left Panel ────────────────────────────────── */}
         <div
           style={{
-            width: 220,
+            width: isMobile ? (showMobileMenu ? "280px" : "0px") : 220,
             borderRight: `1px solid ${colors.border}`,
             background: colors.backgroundSecondary,
             display: "flex",
             flexDirection: "column",
             flexShrink: 0,
             overflow: "hidden",
+            position: isMobile ? "fixed" : "static",
+            top: isMobile ? 48 : "auto",
+            left: 0,
+            bottom: isMobile ? 0 : "auto",
+            zIndex: isMobile ? 50 : "auto",
+            transition: isMobile ? "width 0.3s ease" : "none",
+            transform: isMobile ? (showMobileMenu ? "translateX(0)" : "translateX(-100%)") : "none",
           }}
         >
           <div style={{ flex: 1, overflowY: "auto", padding: "8px 0" }}>
@@ -709,6 +759,96 @@ export default function App() {
             ))}
           </div>
           
+          {/* Mobile Mode Toggle */}
+          {isMobile && (
+            <div style={{ 
+              borderTop: `1px solid ${colors.border}`,
+              padding: '12px'
+            }}>
+              <div style={{ marginBottom: 12 }}>
+                <div style={{
+                  fontSize: 10,
+                  color: colors.textMuted,
+                  textTransform: 'uppercase',
+                  letterSpacing: 1,
+                  marginBottom: 8
+                }}>
+                  Mode
+                </div>
+                <div style={{ display: 'flex', gap: 0 }}>
+                  <button
+                    onClick={() => setMode('web')}
+                    style={{
+                      flex: 1,
+                      padding: '6px 8px',
+                      fontSize: 11,
+                      border: `1px solid ${colors.borderDark}`,
+                      borderTopLeftRadius: 4,
+                      borderBottomLeftRadius: 4,
+                      borderTopRightRadius: 0,
+                      borderBottomRightRadius: 0,
+                      background: mode === 'web' ? colors.selection : colors.buttonBg,
+                      color: mode === 'web' ? '#fff' : colors.textMuted,
+                      cursor: 'pointer',
+                      transition: 'all 0.15s',
+                      fontFamily: 'inherit',
+                    }}
+                  >
+                    WEB
+                  </button>
+                  <button
+                    onClick={() => setMode('diagram')}
+                    style={{
+                      flex: 1,
+                      padding: '6px 8px',
+                      fontSize: 11,
+                      border: `1px solid ${colors.borderDark}`,
+                      borderTopLeftRadius: 0,
+                      borderBottomLeftRadius: 0,
+                      borderTopRightRadius: 4,
+                      borderBottomRightRadius: 4,
+                      marginLeft: -1,
+                      background: mode === 'diagram' ? colors.selection : colors.buttonBg,
+                      color: mode === 'diagram' ? '#fff' : colors.textMuted,
+                      cursor: 'pointer',
+                      transition: 'all 0.15s',
+                      fontFamily: 'inherit',
+                    }}
+                  >
+                    DIAGRAM
+                  </button>
+                </div>
+              </div>
+              <div style={{ marginBottom: 12 }}>
+                <div style={{
+                  fontSize: 10,
+                  color: colors.textMuted,
+                  textTransform: 'uppercase',
+                  letterSpacing: 1,
+                  marginBottom: 8
+                }}>
+                  Actions
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <button onClick={() => { setShowHelp(true); setShowMobileMenu(false); }} style={{
+                    ...topBtnStyle,
+                    width: '100%',
+                    justifyContent: 'center'
+                  }}>
+                    ? Help
+                  </button>
+                  <button onClick={() => { setShowImport(true); setShowMobileMenu(false); }} style={{
+                    ...topBtnStyle,
+                    width: '100%',
+                    justifyContent: 'center'
+                  }}>
+                    ↓ Import
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Theme Toggle at Bottom */}
           <div style={{ 
             borderTop: `1px solid ${colors.border}`,
@@ -739,8 +879,27 @@ export default function App() {
           </div>
         </div>
 
+        {/* ─── Mobile Overlay ──────────────────────────────── */}
+        {isMobile && showMobileMenu && (
+          <div
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: theme === 'light' ? "#00000044" : "#000000aa",
+              zIndex: 40,
+            }}
+            onClick={() => setShowMobileMenu(false)}
+          />
+        )}
+
         {/* ─── Canvas ────────────────────────────────────── */}
-        <div style={{ flex: 1, overflow: "auto", position: "relative", background: colors.canvas }}>
+        <div style={{ 
+          flex: 1, 
+          overflow: "auto", 
+          position: "relative", 
+          background: colors.canvas,
+          marginLeft: isMobile ? 0 : "auto"
+        }}>
           {/* Toolbar strip */}
           <div
             style={{
@@ -749,12 +908,13 @@ export default function App() {
               zIndex: 10,
               display: "flex",
               alignItems: "center",
-              gap: 8,
-              padding: "6px 12px",
+              gap: isMobile ? 4 : 8,
+              padding: isMobile ? "4px 8px" : "6px 12px",
               background: theme === 'light' ? "#f9fafbdd" : "#18181bdd",
               backdropFilter: "blur(8px)",
               borderBottom: `1px solid ${colors.border}`,
-              fontSize: 12,
+              fontSize: isMobile ? 11 : 12,
+              flexWrap: isMobile ? "wrap" : "nowrap",
             }}
           >
             <button
@@ -763,9 +923,11 @@ export default function App() {
                 ...toolBtnStyle,
                 background: tool === "select" ? "#3b82f6" : colors.buttonBg,
                 color: tool === "select" ? "#fff" : colors.textMuted,
+                padding: isMobile ? "3px 6px" : "4px 10px",
+                fontSize: isMobile ? 10 : 12,
               }}
             >
-              ◇ Select
+              {isMobile ? "◇" : "◇ Select"}
             </button>
             <span style={{ color: colors.borderDark }}>│</span>
             
@@ -787,14 +949,15 @@ export default function App() {
                           }}
                           style={{
                             ...toolBtnStyle,
-                            padding: "4px 8px",
+                            padding: isMobile ? "3px 6px" : "4px 8px",
                             background: colors.inputBg,
                             color: colors.text,
                             borderRadius: tabs.length > 1 ? "4px 0 0 4px" : 4,
                             marginRight: tabs.length > 1 ? 0 : 4,
-                            width: 80,
+                            width: isMobile ? 60 : 80,
                             outline: 'none',
                             border: `2px solid ${colors.selection}`,
+                            fontSize: isMobile ? 10 : 11,
                           }}
                           autoFocus
                           onClick={(e) => e.stopPropagation()}
@@ -805,12 +968,13 @@ export default function App() {
                           onDoubleClick={() => startRenamingTab(tab.id, tab.name)}
                           style={{
                             ...toolBtnStyle,
-                            padding: "4px 8px",
+                            padding: isMobile ? "3px 6px" : "4px 8px",
                             background: activeTab === tab.id ? colors.selection : colors.buttonBg,
                             color: activeTab === tab.id ? "#fff" : colors.textMuted,
                             borderRadius: tabs.length > 1 ? "4px 0 0 4px" : 4,
                             marginRight: tabs.length > 1 ? 0 : 4,
-                            minWidth: 60,
+                            minWidth: isMobile ? 40 : 60,
+                            fontSize: isMobile ? 10 : 11,
                           }}
                           title="Double-click to rename"
                         >
@@ -822,13 +986,13 @@ export default function App() {
                           onClick={() => deleteTab(tab.id)}
                           style={{
                             ...toolBtnStyle,
-                            padding: "4px 6px",
+                            padding: isMobile ? "3px 4px" : "4px 6px",
                             background: activeTab === tab.id ? colors.selection : colors.buttonBg,
                             color: activeTab === tab.id ? "#fff" : colors.textMuted,
                             borderRadius: "0 4px 4px 0",
                             borderLeft: "none",
-                            fontSize: 10,
-                            marginRight: index < tabs.length - 1 ? 4 : 0,
+                            fontSize: isMobile ? 9 : 10,
+                            marginRight: index < tabs.length - 1 ? (isMobile ? 2 : 4) : 0,
                           }}
                           title="Delete tab"
                         >
@@ -842,12 +1006,12 @@ export default function App() {
                       onClick={addTab}
                       style={{
                         ...toolBtnStyle,
-                        padding: "4px 8px",
+                        padding: isMobile ? "3px 6px" : "4px 8px",
                         background: colors.buttonBg,
                         color: colors.textMuted,
-                        fontSize: 14,
+                        fontSize: isMobile ? 12 : 14,
                         fontWeight: "bold",
-                        marginLeft: 4,
+                        marginLeft: isMobile ? 2 : 4,
                       }}
                       title="Add new tab"
                     >
@@ -858,19 +1022,41 @@ export default function App() {
                 <span style={{ color: colors.borderDark }}>│</span>
               </>
             )}
+            {!isMobile && (
+              <>
+                <span style={{ color: colors.textMuted }}>
+                  Ln {cursorPos.row + 1}, Col {cursorPos.col + 1}
+                </span>
+                <span style={{ color: colors.borderDark }}>│</span>
+              </>
+            )}
             <span style={{ color: colors.textMuted }}>
-              Ln {cursorPos.row + 1}, Col {cursorPos.col + 1}
+              {isMobile ? `${objects.length}` : `${objects.length} objects`}
             </span>
-            <span style={{ color: colors.borderDark }}>│</span>
-            <span style={{ color: colors.textMuted }}>{objects.length} objects</span>
             <div style={{ flex: 1 }} />
-            <button onClick={() => setZoom((z) => Math.max(0.5, z - 0.1))} style={toolBtnStyle}>
+            <button 
+              onClick={() => setZoom((z) => Math.max(0.5, z - 0.1))} 
+              style={{
+                ...toolBtnStyle,
+                padding: isMobile ? "3px 6px" : "4px 10px",
+                fontSize: isMobile ? 10 : 12,
+              }}
+            >
               −
             </button>
-            <span style={{ color: colors.textMuted, minWidth: 40, textAlign: "center" }}>
-              {Math.round(zoom * 100)}%
-            </span>
-            <button onClick={() => setZoom((z) => Math.min(2, z + 0.1))} style={toolBtnStyle}>
+            {!isMobile && (
+              <span style={{ color: colors.textMuted, minWidth: 40, textAlign: "center" }}>
+                {Math.round(zoom * 100)}%
+              </span>
+            )}
+            <button 
+              onClick={() => setZoom((z) => Math.min(2, z + 0.1))} 
+              style={{
+                ...toolBtnStyle,
+                padding: isMobile ? "3px 6px" : "4px 10px",
+                fontSize: isMobile ? 10 : 12,
+              }}
+            >
               +
             </button>
           </div>
